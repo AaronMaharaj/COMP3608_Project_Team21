@@ -12,3 +12,13 @@ Neurological and cognitive disorders such as Alzheimer's, Parkinson's, and Autis
 The key **stakeholders** in this scenario are understaffed medical clinics and hospital triage centers. Their fundamental need is a fast, cheap, and reliable method to screen patients *before* escalating them to expensive, specialized diagnostics.
 
 By predicting disease likelihood via cheap tabular data (voice recordings, mobile surveys, simple cognitive tests), our models provide immense **benefits**: drastically cutting hospital triage costs and accelerating the timeline for critical patient intervention.
+
+## Considered Datasets
+Alzheimer’s: MRI and Alzheimers
+https://www.kaggle.com/datasets/jboysen/mri-and-alzheimers?select=oasis_longitudinal.csv
+
+Parkinson’s: Parkinson's Disease
+https://www.kaggle.com/datasets/shreyadutta1116/parkinsons-disease
+
+Autism: Autism Screening on Adults
+https://www.kaggle.com/datasets/andrewmvd/autism-screening-on-adults
