@@ -38,3 +38,33 @@ def load_alzheimers(filepath='data/raw/oasis_longitudinal.csv'):
 
     print(f"[Data Loader] OASIS Alzheimer's Dataset Loaded. Shape: {X.shape}")
     return X, y
+
+
+def load_parkinsons(filepath='data/raw/updated_dataset.csv'):
+    """
+    Loads and cleans the Parkinson's Disease acoustic dataset.
+    Target Variable: 'status' (1 = Parkinson's, 0 = Healthy)
+    """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Dataset not found at {filepath}.")
+
+    df = pd.read_csv(filepath)
+
+    # strip weird characters from kaggle headers
+    df.columns = df.columns.str.replace('#', '').str.strip()
+
+    # drop name identifier
+    if 'name' in df.columns:
+        df = df.drop(columns=['name'])
+
+    # drop out any nans
+    df = df.dropna()
+
+    # make sure status is int so pandas doesn't read it as float
+    df['status'] = df['status'].astype(int)
+    
+    X = df.drop('status', axis=1)
+    y = df['status']
+
+    print(f"[Data Loader] Parkinson's Dataset Loaded. Shape: {X.shape}")
+    return X, y
