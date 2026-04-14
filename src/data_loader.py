@@ -40,32 +40,24 @@ def load_alzheimers(filepath='data/raw/oasis_longitudinal.csv'):
     return X, y
 
 
-def load_parkinsons(filepath='data/raw/updated_dataset.csv'):
-    """
-    Loads and cleans the Parkinson's Disease acoustic dataset.
-    Target Variable: 'status' (1 = Parkinson's, 0 = Healthy)
-    """
+def load_parkinsons_v2(filepath='data/raw/pd_speech_features.csv'):
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}.")
 
     df = pd.read_csv(filepath)
 
-    # strip weird characters from kaggle headers
-    df.columns = df.columns.str.replace('#', '').str.strip()
+    # keep only the first recording to ensure no patient appears in both train and test.
+    df = df.drop_duplicates(subset=['id'], keep='first').copy()
 
-    # drop name identifier
-    if 'name' in df.columns:
-        df = df.drop(columns=['name'])
-
-    # drop out any nans
+    #  drop for any rows with missing or corrupted audio parsing values.
     df = df.dropna()
+    df = df.drop(columns=['id'])
 
-    # make sure status is int so pandas doesn't read it as float
-    df['status'] = df['status'].astype(int)
-    
-    X = df.drop('status', axis=1)
-    y = df['status']
+    # split features
+    X = df.drop('class', axis=1)
+    y = df['class']
 
+    print(f"Loaded Parkinson's (Sakar). Shape: {X.shape}")
     print(f"[Data Loader] Parkinson's Dataset Loaded. Shape: {X.shape}")
     return X, y
 
