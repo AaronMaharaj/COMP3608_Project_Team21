@@ -58,4 +58,49 @@ def load_parkinsons_v2(filepath='data/raw/pd_speech_features.csv'):
     y = df['class']
 
     print(f"Loaded Parkinson's (Sakar). Shape: {X.shape}")
+    print(f"[Data Loader] Parkinson's Dataset Loaded. Shape: {X.shape}")
+    return X, y
+
+def load_autism(filepath='data/raw/autism_screening.csv'):
+    """
+    Loads and cleans the Autism Screening dataset.
+    Target Variable: 'Class/ASD' (1 = YES, 0 = NO)
+    """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Dataset not found at {filepath}.")
+
+    df = pd.read_csv(filepath)
+
+    # headers
+    df.columns = df.columns.str.strip()
+
+    # maps target yes/no to 1/0
+    if 'Class/ASD' in df.columns:
+        df['Class/ASD'] = df['Class/ASD'].astype(str).str.upper().map({'YES': 1, 'NO': 0})
+
+    # result would just be the sum of 1-10, dropping so model doesn't cheat
+    cols_to_drop = ['result', 'age_desc']
+    df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
+
+    # incase the dataset uses '?' for missing values
+    df = df.replace('?', pd.NA)
+    df = df.dropna()
+
+    # mapping binary columns
+    binary_cols = ['jundice', 'autism', 'used_app_before']
+    for col in binary_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.upper().map({'YES': 1, 'NO': 0})
+            
+    if 'gender' in df.columns:
+        df['gender'] = df['gender'].astype(str).str.upper().map({'M': 1, 'F': 0})
+
+    # dummies for nominal categories
+    df = pd.get_dummies(df, drop_first=True)
+
+    # isolating feature(x) and target(y)
+    X = df.drop('Class/ASD', axis=1)
+    y = df['Class/ASD']
+
+    print(f"[Data Loader] Autism Screening Dataset Loaded. Shape: {X.shape}")
     return X, y
