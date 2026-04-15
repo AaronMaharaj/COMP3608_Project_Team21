@@ -12,7 +12,7 @@ from sklearn.impute import SimpleImputer
 
 from src.data_loader import load_alzheimers, load_parkinsons_v2, load_autism
 from src.model_pytorch import train_evaluate_pytorch_model
-# TODO: @Levi import your sklearn models here tomorrow morning or tonight idk, also you forgot to create your branches for em
+from src.models_sklearn import train_evaluate_logistic_regression, train_evaluate_random_forest
 
 def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
     print(f"\n{'='*60}")
@@ -20,7 +20,7 @@ def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
     print(f"{'='*60}")
 
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    metrics = {'FNN': []} # TODO: @Levi add 'LR' and 'RF' lists here
+    metrics = {'LR': [], 'RF': [], 'FNN': []}
 
     for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
         print(f"\n--- Fold {fold}/{n_splits} ---")
@@ -35,7 +35,28 @@ def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
         y_train = y_train.reset_index(drop=True)
         y_test = y_test.reset_index(drop=True)
 
-        # TODO: @Levi call train_evaluate_logistic_regression and train_evaluate_random_forest here
+        # Logistic Regression
+        _, lr_acc, lr_rep = train_evaluate_logistic_regression(
+            X_train_clean, y_train, X_test_clean, y_test
+        )
+        metrics['LR'].append({
+            'acc': lr_acc,
+            'f1':  lr_rep['macro avg']['f1-score'],
+            'prec': lr_rep['macro avg']['precision'],
+            'rec':  lr_rep['macro avg']['recall']
+        })
+
+        # Random Forest (feature importances on final fold only)
+        _, rf_acc, rf_rep = train_evaluate_random_forest(
+            X_train_clean, y_train, X_test_clean, y_test,
+            print_features=(fold == n_splits)
+        )
+        metrics['RF'].append({
+            'acc': rf_acc,
+            'f1':  rf_rep['macro avg']['f1-score'],
+            'prec': rf_rep['macro avg']['precision'],
+            'rec':  rf_rep['macro avg']['recall']
+        })
 
         # Feed-Forward Neural Network
         _, fnn_acc, fnn_rep = train_evaluate_pytorch_model(
