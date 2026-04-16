@@ -47,7 +47,6 @@ def load_parkinsons_v2(filepath='data/raw/pd_speech_features.csv'):
     y = df['class']
 
     print(f"Loaded Parkinson's (Sakar). Shape: {X.shape}")
-    print(f"[Data Loader] Parkinson's Dataset Loaded. Shape: {X.shape}")
     return X, y
 
 def load_autism(filepath='data/raw/autism_screening.csv'):
@@ -67,8 +66,8 @@ def load_autism(filepath='data/raw/autism_screening.csv'):
     if 'Class/ASD' in df.columns:
         df['Class/ASD'] = df['Class/ASD'].astype(str).str.upper().map({'YES': 1, 'NO': 0})
 
-    # result would just be the sum of 1-10, dropping so model doesn't cheat
-    cols_to_drop = ['result', 'age_desc']
+    # aq10_items = [f'A{i}_Score' for i in range(1, 11)] drop these too ensure model uses demographic and behavioural predictors
+    cols_to_drop = ['result', 'age_desc'] + aq10_items
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
 
     # incase the dataset uses '?' for missing values
