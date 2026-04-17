@@ -2,84 +2,169 @@ import os
 import sys
 
 # Force UTF-8 stdout
-if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
 from sklearn.impute import SimpleImputer
 
+# Imports for model persistence and statistical testing
+import torch
+import joblib
+import traceback
+import re
+
+# Set seeds for reproducibility across torch and numpy architectures
+torch.manual_seed(67)
+np.random.seed(67)
+
+
 from src.data_loader import load_alzheimers, load_parkinsons_v2, load_autism
 from src.model_pytorch import train_evaluate_pytorch_model
-from src.models_sklearn import train_evaluate_logistic_regression, train_evaluate_random_forest
+from src.models_sklearn import (
+    train_evaluate_logistic_regression,
+    train_evaluate_random_forest,
+)
+
 
 def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
     print(f"\n{'='*60}")
     print(f"EVALUATING: {dataset_name}  ({n_splits}-Fold Stratified CV)")
     print(f"{'='*60}")
 
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    metrics = {'LR': [], 'RF': [], 'FNN': []}
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=67)
+    metrics = {"LR": [], "RF": [], "FNN": []}
+
+    best_models = {
+        "LR": {"model": None, "f1": -1},
+        "RF": {"model": None, "f1": -1},
+        "FNN": {"model": None, "f1": -1},
+    }
 
     for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
+        # Enforce strict determinism locally per-fold
+        torch.manual_seed(67 + fold)
+        np.random.seed(67 + fold)
+
         print(f"\n--- Fold {fold}/{n_splits} ---")
 
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-        imputer = SimpleImputer(strategy='median')
-        X_train_clean = pd.DataFrame(imputer.fit_transform(X_train), columns=X_train.columns)
+        imputer = SimpleImputer(strategy="median")
+        X_train_clean = pd.DataFrame(
+            imputer.fit_transform(X_train), columns=X_train.columns
+        )
         X_test_clean = pd.DataFrame(imputer.transform(X_test), columns=X_test.columns)
 
         y_train = y_train.reset_index(drop=True)
         y_test = y_test.reset_index(drop=True)
 
         # Logistic Regression
-        _, lr_acc, lr_rep = train_evaluate_logistic_regression(
+        lr_model, lr_acc, lr_rep = train_evaluate_logistic_regression(
             X_train_clean, y_train, X_test_clean, y_test
         )
-        metrics['LR'].append({
-            'acc': lr_acc,
-            'f1':  lr_rep['macro avg']['f1-score'],
-            'prec': lr_rep['macro avg']['precision'],
-            'rec':  lr_rep['macro avg']['recall']
-        })
+        lr_f1 = lr_rep["macro avg"]["f1-score"]
+        if lr_f1 > best_models["LR"]["f1"]:
+            best_models["LR"] = {"model": lr_model, "f1": lr_f1}
 
-        # Random Forest (feature importances on final fold only)
-        _, rf_acc, rf_rep = train_evaluate_random_forest(
-            X_train_clean, y_train, X_test_clean, y_test,
-            print_features=(fold == n_splits)
+        metrics["LR"].append(
+            {
+                "acc": lr_acc,
+                "f1": lr_f1,
+                "prec": lr_rep["macro avg"]["precision"],
+                "rec": lr_rep["macro avg"]["recall"],
+            }
         )
-        metrics['RF'].append({
-            'acc': rf_acc,
-            'f1':  rf_rep['macro avg']['f1-score'],
-            'prec': rf_rep['macro avg']['precision'],
-            'rec':  rf_rep['macro avg']['recall']
-        })
+
+        # Random Forest
+        rf_model, rf_acc, rf_rep = train_evaluate_random_forest(
+            X_train_clean,
+            y_train,
+            X_test_clean,
+            y_test,
+        )
+        rf_f1 = rf_rep["macro avg"]["f1-score"]
+        if rf_f1 > best_models["RF"]["f1"]:
+            best_models["RF"] = {"model": rf_model, "f1": rf_f1}
+
+        metrics["RF"].append(
+            {
+                "acc": rf_acc,
+                "f1": rf_f1,
+                "prec": rf_rep["macro avg"]["precision"],
+                "rec": rf_rep["macro avg"]["recall"],
+            }
+        )
 
         # Feed-Forward Neural Network
-        _, fnn_acc, fnn_rep = train_evaluate_pytorch_model(
+        fnn_model, fnn_acc, fnn_rep = train_evaluate_pytorch_model(
             X_train_clean, y_train, X_test_clean, y_test
         )
-        metrics['FNN'].append({
-            'acc': fnn_acc,
-            'f1':  fnn_rep['macro avg']['f1-score'],
-            'prec': fnn_rep['macro avg']['precision'],
-            'rec':  fnn_rep['macro avg']['recall']
-        })
+        fnn_f1 = fnn_rep["macro avg"]["f1-score"]
+        if fnn_f1 > best_models["FNN"]["f1"]:
+            best_models["FNN"] = {"model": fnn_model, "f1": fnn_f1}
+
+        metrics["FNN"].append(
+            {
+                "acc": fnn_acc,
+                "f1": fnn_f1,
+                "prec": fnn_rep["macro avg"]["precision"],
+                "rec": fnn_rep["macro avg"]["recall"],
+            }
+        )
+
+    # save best CV fold model
+    # each fold only saw ~80% data
+    # prob retrain on all data for real use, this snapshot is fine just to poke around
+    os.makedirs("models", exist_ok=True)
+    safe_name = re.sub(r"[^\w]", "_", dataset_name)
+    lr_path = f"models/{safe_name}_lr_pipeline.joblib"
+    rf_path = f"models/{safe_name}_rf.joblib"
+    fnn_path = f"models/{safe_name}_fnn_weights.pt"
+
+    joblib.dump(best_models["LR"]["model"], lr_path)
+    joblib.dump(best_models["RF"]["model"], rf_path)
+    torch.save(best_models["FNN"]["model"].state_dict(), fnn_path)
+
+    print(f"\n   [Saved BEST] LR  (F1: {best_models['LR']['f1']:.4f}) → {lr_path}")
+    print(f"   [Saved BEST] RF  (F1: {best_models['RF']['f1']:.4f}) → {rf_path}")
+    print(f"   [Saved BEST] FNN (F1: {best_models['FNN']['f1']:.4f}) → {fnn_path}")
 
     summary = {}
     print(f"\n{'─'*60}\n  CV SUMMARY — {dataset_name}\n{'─'*60}")
     for model_name, fold_metrics in metrics.items():
-        mean_acc  = np.mean([m['acc']  for m in fold_metrics])
-        mean_f1   = np.mean([m['f1']   for m in fold_metrics])
-        mean_prec = np.mean([m['prec'] for m in fold_metrics])
-        mean_rec  = np.mean([m['rec']  for m in fold_metrics])
-        summary[model_name] = {'Accuracy': mean_acc, 'F1-Score': mean_f1, 'Precision': mean_prec, 'Recall': mean_rec}
-        print(f"  [{model_name:>3}] Acc: {mean_acc:.4f} | F1: {mean_f1:.4f} | Prec: {mean_prec:.4f} | Rec: {mean_rec:.4f}")
+        mean_acc = np.mean([m["acc"] for m in fold_metrics])
+        mean_f1 = np.mean([m["f1"] for m in fold_metrics])
+        mean_prec = np.mean([m["prec"] for m in fold_metrics])
+        mean_rec = np.mean([m["rec"] for m in fold_metrics])
+        # Report ± std to expose fold-to-fold variance natively across all metrics
+        std_acc = np.std([m["acc"] for m in fold_metrics])
+        std_f1 = np.std([m["f1"] for m in fold_metrics])
+        std_prec = np.std([m["prec"] for m in fold_metrics])
+        std_rec = np.std([m["rec"] for m in fold_metrics])
 
-    return summary
+        summary[model_name] = {
+            "Accuracy": mean_acc,
+            "Std_Accuracy": std_acc,
+            "F1-Score": mean_f1,
+            "Std_F1_Score": std_f1,
+            "Precision": mean_prec,
+            "Std_Precision": std_prec,
+            "Recall": mean_rec,
+            "Std_Recall": std_rec,
+        }
+        print(
+            f"  [{model_name:>3}] Acc: {mean_acc:.4f} ± {std_acc:.4f} | "
+            f"F1: {mean_f1:.4f} ± {std_f1:.4f} | "
+            f"Prec: {mean_prec:.4f} ± {std_prec:.4f} | "
+            f"Rec: {mean_rec:.4f} ± {std_rec:.4f}"
+        )
+
+    return summary, metrics
+
 
 def main():
     print("Initializing COMP3608 (5-Fold Stratified CV)...")
@@ -87,27 +172,45 @@ def main():
     datasets = {
         "OASIS Alzheimer's": load_alzheimers,
         "Parkinson's (Sakar)": load_parkinsons_v2,
-        "Autism Screening": load_autism
+        "Autism Screening": load_autism,
     }
 
     all_results = []
+    all_fold_metrics = {}
     for name, loader_func in datasets.items():
         try:
             X, y = loader_func()
-            summary = evaluate_pipeline_cv(name, X, y)
+            summary, fold_metrics = evaluate_pipeline_cv(name, X, y)
+            all_fold_metrics[name] = fold_metrics
             for model, scores in summary.items():
-                all_results.append({
-                    'Dataset': name, 'Model': model,
-                    'Mean_Accuracy': round(scores['Accuracy'], 4), 'Mean_F1_Score': round(scores['F1-Score'], 4),
-                    'Mean_Precision': round(scores['Precision'], 4), 'Mean_Recall': round(scores['Recall'], 4)
-                })
+                all_results.append(
+                    {
+                        "Dataset": name,
+                        "Model": model,
+                        "Mean_Accuracy": round(scores["Accuracy"], 4),
+                        "Std_Accuracy": round(scores["Std_Accuracy"], 4),
+                        "Mean_F1_Score": round(scores["F1-Score"], 4),
+                        "Std_F1_Score": round(scores["Std_F1_Score"], 4),
+                        "Mean_Precision": round(scores["Precision"], 4),
+                        "Std_Precision": round(scores["Std_Precision"], 4),
+                        "Mean_Recall": round(scores["Recall"], 4),
+                        "Std_Recall": round(scores["Std_Recall"], 4),
+                    }
+                )
         except Exception as e:
             print(f"\n[ERROR] Failed on {name}: {e}")
+            traceback.print_exc()
 
-    results_df = pd.DataFrame(all_results)
-    results_df.to_csv("project_results_summary.csv", index=False, encoding='utf-8-sig')
-    print(f"\n{'='*60}\n  Pipeline complete. Results saved to CSV.\n{'='*60}\n")
-    print(results_df.to_string(index=False))
+    if all_results:
+        results_df = pd.DataFrame(all_results)
+        results_df.to_csv(
+            "project_results_summary.csv", index=False, encoding="utf-8-sig"
+        )
+        print(f"\n{'='*60}\n  Pipeline complete. Results saved to CSV.\n{'='*60}\n")
+        print(results_df.to_string(index=False))
+    else:
+        print("\n[WARNING] No results generated to save.")
+
 
 if __name__ == "__main__":
     main()
