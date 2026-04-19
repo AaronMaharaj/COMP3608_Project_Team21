@@ -53,21 +53,14 @@ def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-        # Note: The SimpleImputer in the fold loop is now redundant for Autism 
-        # since imputation is inside the sklearn pipeline — however Alzheimer's 
-        # and Parkinson's still need it since their loaders return fully numeric DataFrames.
-        imputer = SimpleImputer(strategy="median")
-        X_train_clean = pd.DataFrame(
-            imputer.fit_transform(X_train), columns=X_train.columns
-        )
-        X_test_clean = pd.DataFrame(imputer.transform(X_test), columns=X_test.columns)
+        # Note: Imputation is now fully encapsulated within each model's pipeline.
 
         y_train = y_train.reset_index(drop=True)
         y_test = y_test.reset_index(drop=True)
 
         # Logistic Regression
         lr_model, lr_acc, lr_rep = train_evaluate_logistic_regression(
-            X_train_clean, y_train, X_test_clean, y_test
+            X_train, y_train, X_test, y_test
         )
         lr_f1 = lr_rep["macro avg"]["f1-score"]
         if lr_f1 > best_models["LR"]["f1"]:
@@ -84,9 +77,9 @@ def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
 
         # Random Forest
         rf_model, rf_acc, rf_rep = train_evaluate_random_forest(
-            X_train_clean,
+            X_train,
             y_train,
-            X_test_clean,
+            X_test,
             y_test,
         )
         rf_f1 = rf_rep["macro avg"]["f1-score"]
@@ -102,9 +95,15 @@ def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
             }
         )
 
+        # We reuse the LR pipeline's fitted preprocessor to ensure the FNN receives
+        # consistently encoded and imputed data without fitting a separate transformer.
+        fitted_preprocessor = lr_model.named_steps["preprocessor"]
+        X_train_encoded = pd.DataFrame(fitted_preprocessor.transform(X_train))
+        X_test_encoded = pd.DataFrame(fitted_preprocessor.transform(X_test))
+
         # Feed-Forward Neural Network
         fnn_model, fnn_acc, fnn_rep = train_evaluate_pytorch_model(
-            X_train_clean, y_train, X_test_clean, y_test
+            X_train_encoded, y_train, X_test_encoded, y_test
         )
         fnn_f1 = fnn_rep["macro avg"]["f1-score"]
         if fnn_f1 > best_models["FNN"]["f1"]:

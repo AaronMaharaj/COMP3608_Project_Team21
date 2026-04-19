@@ -2,6 +2,7 @@ from typing import Any, Dict, Tuple, cast
 
 import pandas as pd
 
+# for exponential C value search (1e-3 to 10) instead of linear
 from scipy.stats import loguniform
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
@@ -28,7 +29,8 @@ def build_preprocessing_pipeline(X_train: pd.DataFrame) -> ColumnTransformer:
 
     categorical_transformer = Pipeline(
         steps=[
-            ("imputer", SimpleImputer(strategy="most_frequent")),
+            # Unknown instead of mode to avoid demographic bias
+            ("imputer", SimpleImputer(strategy="constant", fill_value="Unknown")),
             ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
         ]
     )
@@ -39,6 +41,7 @@ def build_preprocessing_pipeline(X_train: pd.DataFrame) -> ColumnTransformer:
             ("cat", categorical_transformer, categorical_cols),
         ]
     )
+
     return preprocessor
 
 
@@ -63,6 +66,7 @@ def train_evaluate_logistic_regression(
             ),
         ]
     )
+
     param_dist = {
         "clf__C": loguniform(1e-3, 1e1),
         "clf__solver": ["lbfgs", "saga"],
@@ -90,6 +94,7 @@ def train_evaluate_logistic_regression(
         f"   [LR]  Acc: {acc:.4f} | F1: {rep['macro avg']['f1-score']:.4f} | "
         f"Prec: {rep['macro avg']['precision']:.4f} | Rec: {rep['macro avg']['recall']:.4f}"
     )
+
     return best_pipeline, acc, rep
 
 
@@ -108,13 +113,14 @@ def train_evaluate_random_forest(
             (
                 "clf",
                 RandomForestClassifier(
-                    random_state=seed, n_jobs=1, class_weight="balanced"
+                    random_state=seed,
+                    n_jobs=1,  # Avoid Windows deadlock with nested parallelism
+                    class_weight="balanced",
                 ),
             ),
         ]
     )
 
-    # default backend can deadlock on windows, n_jobs=1, -1 search to avoid
     param_dist_rf = {
         "clf__n_estimators": [100, 150, 200, 300],
         "clf__max_depth": [5, 7, 10, None],
