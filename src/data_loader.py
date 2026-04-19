@@ -81,18 +81,6 @@ def load_autism(filepath='data/raw/autism_screening.csv'):
     if dropped_count > 0:
         print(f"   [Autism] Dropped {dropped_count} rows with missing values.")
 
-    # mapping binary columns
-    binary_cols = ['jundice', 'autism', 'used_app_before']
-    for col in binary_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.upper().map({'YES': 1, 'NO': 0})
-            
-    if 'gender' in df.columns:
-        df['gender'] = df['gender'].astype(str).str.upper().map({'M': 1, 'F': 0})
-
-    # dummies for nominal categories
-    df = pd.get_dummies(df, drop_first=True)
-
     # isolating feature(x) and target(y)
     X = df.drop('Class/ASD', axis=1)
     y = df['Class/ASD']

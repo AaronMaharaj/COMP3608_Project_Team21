@@ -53,6 +53,9 @@ def evaluate_pipeline_cv(dataset_name, X, y, n_splits=5):
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
+        # Note: The SimpleImputer in the fold loop is now redundant for Autism 
+        # since imputation is inside the sklearn pipeline — however Alzheimer's 
+        # and Parkinson's still need it since their loaders return fully numeric DataFrames.
         imputer = SimpleImputer(strategy="median")
         X_train_clean = pd.DataFrame(
             imputer.fit_transform(X_train), columns=X_train.columns
