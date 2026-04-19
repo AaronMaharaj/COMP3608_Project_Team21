@@ -17,8 +17,8 @@ By predicting disease likelihood via cheap tabular data (voice recordings, mobil
 Alzheimer’s: MRI and Alzheimers
 https://www.kaggle.com/datasets/jboysen/mri-and-alzheimers?select=oasis_longitudinal.csv
 
-Parkinson’s: Parkinson's Disease
-https://www.kaggle.com/datasets/shreyadutta1116/parkinsons-disease
+Parkinson’s: Parkinson's Disease (PD) classification
+https://www.kaggle.com/datasets/dipayanbiswas/parkinsons-disease-speech-signal-features
 
 Autism: Autism Screening on Adults
 https://www.kaggle.com/datasets/andrewmvd/autism-screening-on-adults
