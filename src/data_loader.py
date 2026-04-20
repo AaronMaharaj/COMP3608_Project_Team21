@@ -40,11 +40,11 @@ def load_parkinsons_v2(filepath="data/raw/pd_speech_features.csv"):
     # then keep only the first recording to ensure no patient appears in both train and test.
     df = df.sort_values("id").drop_duplicates(subset=["id"], keep="first").copy()
 
-    #  drop for any rows with missing or corrupted audio parsing values.
+    # Drop rows with missing or corrupted audio parsing values.
     df = df.dropna()
     df = df.drop(columns=["id"])
 
-    # split features
+    # Split features and target.
     X = df.drop("class", axis=1)
     y = df["class"]
 
@@ -62,10 +62,10 @@ def load_autism(filepath="data/raw/autism_screening.csv"):
 
     df = pd.read_csv(filepath)
 
-    # headers
+    # Strip whitespace from column names.
     df.columns = df.columns.str.strip()
 
-    # maps target yes/no to 1/0
+    # Map target variable: yes/no to 1/0.
     if "Class/ASD" in df.columns:
         df["Class/ASD"] = (
             df["Class/ASD"].astype(str).str.upper().map({"YES": 1, "NO": 0})
@@ -77,15 +77,15 @@ def load_autism(filepath="data/raw/autism_screening.csv"):
     cols_to_drop = ["result", "age_desc"] + aq10_items
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
 
-    # incase the dataset uses '?' for missing values
+    # In case the dataset uses '?' for missing values, replace with NaN.
     df = df.replace("?", np.nan)
 
-    # We do not drop NaN rows here. Missingness is handled downstream in the pipeline.
+    # Do not drop NaN rows here; missingness is handled downstream in the pipeline.
     print(
         f"   [Autism] {df.isnull().any(axis=1).sum()} rows contain missing values — handled by pipeline imputer"
     )
 
-    # isolating feature(x) and target(y)
+    # Isolate features (X) and target (y).
     X = df.drop("Class/ASD", axis=1)
     y = df["Class/ASD"]
 
