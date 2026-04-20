@@ -1,8 +1,6 @@
 from typing import Any, Dict, Tuple, cast
 
 import pandas as pd
-
-# for exponential C value search (1e-3 to 10) instead of linear
 from scipy.stats import loguniform
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
@@ -15,6 +13,14 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 def build_preprocessing_pipeline(X_train: pd.DataFrame) -> ColumnTransformer:
+    """Build a preprocessing pipeline for numeric and categorical features.
+
+    Args:
+        X_train: Training features DataFrame.
+
+    Returns:
+        ColumnTransformer with numeric and categorical preprocessing steps.
+    """
     numeric_cols = X_train.select_dtypes(include=["int64", "float64"]).columns.tolist()
     categorical_cols = X_train.select_dtypes(
         include=["object", "category"]
@@ -29,7 +35,7 @@ def build_preprocessing_pipeline(X_train: pd.DataFrame) -> ColumnTransformer:
 
     categorical_transformer = Pipeline(
         steps=[
-            # Unknown instead of mode to avoid demographic bias
+            # Use "Unknown" instead of mode to avoid demographic bias.
             ("imputer", SimpleImputer(strategy="constant", fill_value="Unknown")),
             ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
         ]
@@ -52,23 +58,35 @@ def train_evaluate_logistic_regression(
     y_test: pd.Series,
     seed: int = 67,
 ) -> Tuple[Pipeline, float, Dict[str, Any]]:
+    """Train and evaluate a logistic regression model with hyperparameter tuning.
+
+    Args:
+        X_train: Training features.
+        y_train: Training labels.
+        X_test: Test features.
+        y_test: Test labels.
+        seed: Random seed (default: 67).
+
+    Returns:
+        Tuple of (model_pipeline, accuracy, classification_report_dict).
+    """
     preprocessor = build_preprocessing_pipeline(X_train)
 
-    # n_iter=10 keeps the search fast enough for the outer 5-fold loop
+    # n_iter=10 keeps the search fast enough for the outer 5-fold loop.
     pipeline = Pipeline(
         [
             ("preprocessor", preprocessor),
             (
                 "clf",
                 LogisticRegression(
-                    max_iter=2000, random_state=seed, class_weight="balanced"
+                    max_iter=10000, random_state=seed, class_weight="balanced"
                 ),
             ),
         ]
     )
 
     param_dist = {
-        "clf__C": loguniform(1e-3, 1e1),
+        "clf__C": loguniform(1e-3, 1e1),  # Exponential search (1e-3 to 10).
         "clf__solver": ["lbfgs", "saga"],
     }
     search = RandomizedSearchCV(
@@ -90,9 +108,14 @@ def train_evaluate_logistic_regression(
         classification_report(y_test, predictions, zero_division=0, output_dict=True),
     )
 
+    macro_avg = cast(Dict[str, float], rep.get("macro avg", {}))
+    f1_score = macro_avg.get("f1-score", 0.0)
+    precision = macro_avg.get("precision", 0.0)
+    recall = macro_avg.get("recall", 0.0)
+
     print(
-        f"   [LR]  Acc: {acc:.4f} | F1: {rep['macro avg']['f1-score']:.4f} | "
-        f"Prec: {rep['macro avg']['precision']:.4f} | Rec: {rep['macro avg']['recall']:.4f}"
+        f"   [LR]  Acc: {acc:.4f} | F1: {f1_score:.4f} | "
+        f"Prec: {precision:.4f} | Rec: {recall:.4f}"
     )
 
     return best_pipeline, acc, rep
@@ -105,6 +128,18 @@ def train_evaluate_random_forest(
     y_test: pd.Series,
     seed: int = 67,
 ) -> Tuple[Pipeline, float, Dict[str, Any]]:
+    """Train and evaluate a random forest model with hyperparameter tuning.
+
+    Args:
+        X_train: Training features.
+        y_train: Training labels.
+        X_test: Test features.
+        y_test: Test labels.
+        seed: Random seed (default: 67).
+
+    Returns:
+        Tuple of (model_pipeline, accuracy, classification_report_dict).
+    """
     preprocessor = build_preprocessing_pipeline(X_train)
 
     pipeline = Pipeline(
@@ -114,7 +149,7 @@ def train_evaluate_random_forest(
                 "clf",
                 RandomForestClassifier(
                     random_state=seed,
-                    n_jobs=1,  # Avoid Windows deadlock with nested parallelism
+                    n_jobs=1,  # Avoid Windows deadlock with nested parallelism.
                     class_weight="balanced",
                 ),
             ),
@@ -149,10 +184,15 @@ def train_evaluate_random_forest(
         classification_report(y_test, test_preds, zero_division=0, output_dict=True),
     )
 
+    macro_avg = cast(Dict[str, float], rep.get("macro avg", {}))
+    f1_score = macro_avg.get("f1-score", 0.0)
+    precision = macro_avg.get("precision", 0.0)
+    recall = macro_avg.get("recall", 0.0)
+
     print(
         f"   [RF]  Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f} | "
-        f"F1: {rep['macro avg']['f1-score']:.4f} | "
-        f"Prec: {rep['macro avg']['precision']:.4f} | Rec: {rep['macro avg']['recall']:.4f}"
+        f"F1: {f1_score:.4f} | "
+        f"Prec: {precision:.4f} | Rec: {recall:.4f}"
     )
 
     return rf_model, test_acc, rep
