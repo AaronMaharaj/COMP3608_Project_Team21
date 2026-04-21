@@ -49,7 +49,7 @@ class TabularFNN(nn.Module):
 
 
 def train_evaluate_pytorch_model(
-    X_train, y_train, X_test, y_test, epochs=200, batch_size=64
+    X_train, y_train, X_test, y_test, epochs=200, batch_size=64, threshold=0.5
 ):
     """Train and evaluate a PyTorch FNN model with early stopping.
 
@@ -137,7 +137,7 @@ def train_evaluate_pytorch_model(
     model.eval()
     with torch.no_grad():
         probs = torch.sigmoid(model(X_test_t))
-        binary_preds = (probs >= 0.5).cpu().int().numpy().flatten()
+        binary_preds = (probs >= threshold).cpu().int().numpy().flatten()
 
     acc = accuracy_score(y_test_true, binary_preds)
     rep = cast(

@@ -51,9 +51,9 @@ def evaluate_pipeline_cv(
     metrics = {"LR": [], "RF": [], "FNN": []}
 
     best_models = {
-        "LR": {"model": None, "f1": -1},
-        "RF": {"model": None, "f1": -1},
-        "FNN": {"model": None, "f1": -1},
+        "LR": {"model": None, "rec": -1, "f1": -1},
+        "RF": {"model": None, "rec": -1, "f1": -1},
+        "FNN": {"model": None, "rec": -1, "f1": -1},
     }
 
     for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
@@ -76,15 +76,16 @@ def evaluate_pipeline_cv(
             X_train, y_train, X_test, y_test
         )
         lr_f1 = float(lr_rep["macro avg"]["f1-score"])
-        if lr_f1 > best_models["LR"]["f1"]:
-            best_models["LR"] = {"model": lr_model, "f1": lr_f1}
+        lr_rec = float(lr_rep["macro avg"]["recall"])
+        if lr_rec > best_models["LR"]["rec"]:
+            best_models["LR"] = {"model": lr_model, "rec": lr_rec, "f1": lr_f1}
 
         metrics["LR"].append(
             {
                 "acc": lr_acc,
                 "f1": lr_f1,
                 "prec": lr_rep["macro avg"]["precision"],
-                "rec": lr_rep["macro avg"]["recall"],
+                "rec": lr_rec,
             }
         )
 
@@ -96,15 +97,16 @@ def evaluate_pipeline_cv(
             y_test,
         )
         rf_f1 = float(rf_rep["macro avg"]["f1-score"])
-        if rf_f1 > best_models["RF"]["f1"]:
-            best_models["RF"] = {"model": rf_model, "f1": rf_f1}
+        rf_rec = float(rf_rep["macro avg"]["recall"])
+        if rf_rec > best_models["RF"]["rec"]:
+            best_models["RF"] = {"model": rf_model, "rec": rf_rec, "f1": rf_f1}
 
         metrics["RF"].append(
             {
                 "acc": rf_acc,
                 "f1": rf_f1,
                 "prec": rf_rep["macro avg"]["precision"],
-                "rec": rf_rep["macro avg"]["recall"],
+                "rec": rf_rec,
             }
         )
 
@@ -116,18 +118,19 @@ def evaluate_pipeline_cv(
 
         # Feed-Forward Neural Network.
         fnn_model, fnn_acc, fnn_rep = train_evaluate_pytorch_model(
-            X_train_encoded, y_train, X_test_encoded, y_test
+            X_train_encoded, y_train, X_test_encoded, y_test, threshold=0.35
         )
         fnn_f1 = float(fnn_rep["macro avg"]["f1-score"])
-        if fnn_f1 > best_models["FNN"]["f1"]:
-            best_models["FNN"] = {"model": fnn_model, "f1": fnn_f1}
+        fnn_rec = float(fnn_rep["macro avg"]["recall"])
+        if fnn_rec > best_models["FNN"]["rec"]:
+            best_models["FNN"] = {"model": fnn_model, "rec": fnn_rec, "f1": fnn_f1}
 
         metrics["FNN"].append(
             {
                 "acc": fnn_acc,
                 "f1": fnn_f1,
                 "prec": fnn_rep["macro avg"]["precision"],
-                "rec": fnn_rep["macro avg"]["recall"],
+                "rec": fnn_rec,
             }
         )
 
@@ -144,9 +147,9 @@ def evaluate_pipeline_cv(
     joblib.dump(best_models["RF"]["model"], rf_path)
     torch.save(best_models["FNN"]["model"].state_dict(), fnn_path)
 
-    print(f"\n   [Saved BEST] LR  (F1: {best_models['LR']['f1']:.4f}) → {lr_path}")
-    print(f"   [Saved BEST] RF  (F1: {best_models['RF']['f1']:.4f}) → {rf_path}")
-    print(f"   [Saved BEST] FNN (F1: {best_models['FNN']['f1']:.4f}) → {fnn_path}")
+    print(f"\n   [Saved BEST] LR  (Rec: {best_models['LR']['rec']:.4f}) → {lr_path}")
+    print(f"   [Saved BEST] RF  (Rec: {best_models['RF']['rec']:.4f}) → {rf_path}")
+    print(f"   [Saved BEST] FNN (Rec: {best_models['FNN']['rec']:.4f}) → {fnn_path}")
 
     summary: Dict[str, Dict[str, float]] = {}
     print(f"\n{'─'*60}\n  CV SUMMARY — {dataset_name}\n{'─'*60}")
