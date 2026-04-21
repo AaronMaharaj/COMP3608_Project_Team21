@@ -94,7 +94,7 @@ def train_evaluate_logistic_regression(
         param_dist,
         n_iter=10,
         cv=3,
-        scoring="f1_macro",
+        scoring="recall_macro",
         random_state=seed,
         n_jobs=-1,
     )
@@ -167,7 +167,7 @@ def train_evaluate_random_forest(
         param_dist_rf,
         n_iter=10,
         cv=3,
-        scoring="f1_macro",
+        scoring="recall_macro",
         random_state=seed,
         n_jobs=-1,
     )

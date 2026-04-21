@@ -71,10 +71,10 @@ def load_autism(filepath="data/raw/autism_screening.csv"):
             df["Class/ASD"].astype(str).str.upper().map({"YES": 1, "NO": 0})
         )
 
-    # Drop AQ-10 item scores to ensure the model uses demographic and behavioural predictors.
-    # We also drop 'result' because it is literally the sum of A1-A10 (direct target leakage).
-    aq10_items = [f"A{i}_Score" for i in range(1, 11)]
-    cols_to_drop = ["result", "age_desc"] + aq10_items
+    # Drop 'result' because it is literally the sum of A1-A10 (direct target leakage).
+    # Drop "age_desc" because it's a constant string in this dataset ('18 and more') and provides zero variance.
+    # Fix: bring back a1-a10 since they are the primary behavioral signals
+    cols_to_drop = ["result", "age_desc"]
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
 
     # In case the dataset uses '?' for missing values, replace with NaN.
