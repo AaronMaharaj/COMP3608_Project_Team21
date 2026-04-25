@@ -1,9 +1,24 @@
-import pandas as pd
 import os
+from typing import Tuple
+
 import numpy as np
+import pandas as pd
 
 
-def load_alzheimers(filepath="data/raw/oasis_longitudinal.csv"):
+def load_alzheimers(
+    filepath: str = "data/raw/oasis_longitudinal.csv",
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """Load and clean the OASIS Alzheimer's longitudinal dataset.
+
+    Uses only baseline visits (Visit == 1) and enforces strict binary
+    classification by excluding 'Converted' patients.
+
+    Args:
+        filepath: Path to the raw CSV file.
+
+    Returns:
+        Tuple of (features, target) where target is 1=Demented, 0=Nondemented.
+    """
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}.")
 
@@ -26,11 +41,25 @@ def load_alzheimers(filepath="data/raw/oasis_longitudinal.csv"):
     X = df.drop("Group", axis=1)
     y = df["Group"].astype(int)
 
-    print(f"Loaded OASIS Alzheimer's. Shape: {X.shape}")
     return X, y
 
 
-def load_parkinsons_v2(filepath="data/raw/pd_speech_features.csv"):
+def load_parkinsons_v2(
+    filepath: str = "data/raw/pd_speech_features.csv",
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """Load Parkinson's dataset with one recording per patient (deduplicated).
+
+    .. deprecated::
+        Use :func:`load_parkinsons_v3` instead. This loader discards biological
+        variance across recordings and is only useful for quick single-recording
+        experiments. The main pipeline uses v3 with GroupKFold.
+
+    Args:
+        filepath: Path to the raw CSV file.
+
+    Returns:
+        Tuple of (features, target).
+    """
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}.")
 
@@ -48,14 +77,50 @@ def load_parkinsons_v2(filepath="data/raw/pd_speech_features.csv"):
     X = df.drop("class", axis=1)
     y = df["class"]
 
-    print(f"Loaded Parkinson's (Sakar). Shape: {X.shape}")
     return X, y
 
 
-def load_autism(filepath="data/raw/autism_screening.csv"):
+def load_parkinsons_v3(
+    filepath: str = "data/raw/pd_speech_features.csv",
+) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
+    """Load the full Sakar Parkinson's dataset with all recordings per patient.
+
+    Unlike v2 which deduplicates to 1 recording per patient, this loader
+    retains all 3 recordings to preserve biological variance (fatigue, stress).
+    Returns the patient id as a group vector for use with GroupKFold/GroupShuffleSplit
+    to prevent data leakage.
+
+    Args:
+        filepath: Path to the raw CSV file.
+
+    Returns:
+        Tuple of (features, target, groups) where groups is the patient id Series.
     """
-    Loads and cleans the Autism Screening dataset.
-    Target Variable: 'Class/ASD' (1 = YES, 0 = NO)
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Dataset not found at {filepath}.")
+
+    df = pd.read_csv(filepath)
+    df = df.dropna()
+
+    groups = df["id"]
+    X = df.drop(columns=["class", "id"])
+    y = df["class"]
+
+    return X, y, groups
+
+
+def load_autism(
+    filepath: str = "data/raw/autism_screening.csv",
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """Load and clean the Autism Screening dataset.
+
+    Target Variable: 'Class/ASD' (1 = YES, 0 = NO).
+
+    Args:
+        filepath: Path to the raw CSV file.
+
+    Returns:
+        Tuple of (features, target).
     """
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}.")
@@ -81,13 +146,9 @@ def load_autism(filepath="data/raw/autism_screening.csv"):
     df = df.replace("?", np.nan)
 
     # Do not drop NaN rows here; missingness is handled downstream in the pipeline.
-    print(
-        f"   [Autism] {df.isnull().any(axis=1).sum()} rows contain missing values — handled by pipeline imputer"
-    )
 
     # Isolate features (X) and target (y).
     X = df.drop("Class/ASD", axis=1)
     y = df["Class/ASD"]
 
-    print(f"[Data Loader] Autism Screening Dataset Loaded. Shape: {X.shape}")
     return X, y
