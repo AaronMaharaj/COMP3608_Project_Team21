@@ -1,15 +1,10 @@
-import os
-import re
 import sys
 import traceback
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Dict, List
 
-import joblib
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.impute import SimpleImputer
-from sklearn.model_selection import StratifiedKFold
 
 # Set seeds for reproducibility across torch and numpy architectures.
 torch.manual_seed(67)
@@ -19,206 +14,98 @@ np.random.seed(67)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
-from src.data_loader import load_alzheimers, load_autism, load_parkinsons_v2
-from src.model_pytorch import train_evaluate_pytorch_model
-from src.models_sklearn import (
-    train_evaluate_logistic_regression,
-    train_evaluate_random_forest,
-)
+from src.data_loader import load_alzheimers, load_autism, load_parkinsons_v3
+from src.evaluation import evaluate_pipeline
 
 
-def evaluate_pipeline_cv(
-    dataset_name: str, X: pd.DataFrame, y: pd.Series, n_splits: int = 5
-) -> Tuple[Dict[str, Dict[str, float]], Dict[str, List[Dict[str, float]]]]:
-    """Evaluate ML models using stratified k-fold cross-validation.
-
-    Args:
-        dataset_name: Name of the dataset for display and saving.
-        X: Feature matrix.
-        y: Target variable.
-        n_splits: Number of cross-validation folds (default: 5).
-
-    Returns:
-        Tuple of (summary_dict, fold_metrics_dict) where:
-            - summary_dict contains mean/std metrics for each model
-            - fold_metrics_dict contains per-fold metrics
-    """
-    print(f"\n{'='*60}")
-    print(f"EVALUATING: {dataset_name}  ({n_splits}-Fold Stratified CV)")
-    print(f"{'='*60}")
-
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=67)
-    metrics = {"LR": [], "RF": [], "FNN": []}
-
-    best_models = {
-        "LR": {"model": None, "rec": -1, "f1": -1},
-        "RF": {"model": None, "rec": -1, "f1": -1},
-        "FNN": {"model": None, "rec": -1, "f1": -1},
-    }
-
-    for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
-        # Enforce strict determinism locally per-fold
-        torch.manual_seed(67 + fold)
-        np.random.seed(67 + fold)
-
-        print(f"\n--- Fold {fold}/{n_splits} ---")
-
-        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-        # Note: Imputation is fully encapsulated within each model's pipeline.
-
-        y_train = y_train.reset_index(drop=True)
-        y_test = y_test.reset_index(drop=True)
-
-        # Logistic Regression.
-        lr_model, lr_acc, lr_rep = train_evaluate_logistic_regression(
-            X_train, y_train, X_test, y_test
-        )
-        lr_f1 = float(lr_rep["macro avg"]["f1-score"])
-        lr_rec = float(lr_rep["macro avg"]["recall"])
-        if lr_rec > best_models["LR"]["rec"]:
-            best_models["LR"] = {"model": lr_model, "rec": lr_rec, "f1": lr_f1}
-
-        metrics["LR"].append(
-            {
-                "acc": lr_acc,
-                "f1": lr_f1,
-                "prec": lr_rep["macro avg"]["precision"],
-                "rec": lr_rec,
-            }
-        )
-
-        # Random Forest.
-        rf_model, rf_acc, rf_rep = train_evaluate_random_forest(
-            X_train,
-            y_train,
-            X_test,
-            y_test,
-        )
-        rf_f1 = float(rf_rep["macro avg"]["f1-score"])
-        rf_rec = float(rf_rep["macro avg"]["recall"])
-        if rf_rec > best_models["RF"]["rec"]:
-            best_models["RF"] = {"model": rf_model, "rec": rf_rec, "f1": rf_f1}
-
-        metrics["RF"].append(
-            {
-                "acc": rf_acc,
-                "f1": rf_f1,
-                "prec": rf_rep["macro avg"]["precision"],
-                "rec": rf_rec,
-            }
-        )
-
-        # Reuse LR's fitted preprocessor to ensure FNN receives consistently encoded
-        # and imputed data without fitting a separate transformer.
-        fitted_preprocessor = lr_model.named_steps["preprocessor"]
-        X_train_encoded = pd.DataFrame(fitted_preprocessor.transform(X_train))
-        X_test_encoded = pd.DataFrame(fitted_preprocessor.transform(X_test))
-
-        # Feed-Forward Neural Network.
-        fnn_model, fnn_acc, fnn_rep = train_evaluate_pytorch_model(
-            X_train_encoded, y_train, X_test_encoded, y_test, threshold=0.35
-        )
-        fnn_f1 = float(fnn_rep["macro avg"]["f1-score"])
-        fnn_rec = float(fnn_rep["macro avg"]["recall"])
-        if fnn_rec > best_models["FNN"]["rec"]:
-            best_models["FNN"] = {"model": fnn_model, "rec": fnn_rec, "f1": fnn_f1}
-
-        metrics["FNN"].append(
-            {
-                "acc": fnn_acc,
-                "f1": fnn_f1,
-                "prec": fnn_rep["macro avg"]["precision"],
-                "rec": fnn_rec,
-            }
-        )
-
-    # Save best model from each CV fold.
-    # Note: Each fold only saw ~80% of data. For production, retrain on all data.
-    # This snapshot is useful for initial model exploration.
-    os.makedirs("models", exist_ok=True)
-    safe_name = re.sub(r"[^\w]", "_", dataset_name)
-    lr_path = f"models/{safe_name}_lr_pipeline.joblib"
-    rf_path = f"models/{safe_name}_rf.joblib"
-    fnn_path = f"models/{safe_name}_fnn_weights.pt"
-
-    joblib.dump(best_models["LR"]["model"], lr_path)
-    joblib.dump(best_models["RF"]["model"], rf_path)
-    torch.save(best_models["FNN"]["model"].state_dict(), fnn_path)
-
-    print(f"\n   [Saved BEST] LR  (Rec: {best_models['LR']['rec']:.4f}) → {lr_path}")
-    print(f"   [Saved BEST] RF  (Rec: {best_models['RF']['rec']:.4f}) → {rf_path}")
-    print(f"   [Saved BEST] FNN (Rec: {best_models['FNN']['rec']:.4f}) → {fnn_path}")
-
-    summary: Dict[str, Dict[str, float]] = {}
-    print(f"\n{'─'*60}\n  CV SUMMARY — {dataset_name}\n{'─'*60}")
-    for model_name, fold_metrics in metrics.items():
-        mean_acc = float(np.mean([m["acc"] for m in fold_metrics]))
-        mean_f1 = float(np.mean([m["f1"] for m in fold_metrics]))
-        mean_prec = float(np.mean([m["prec"] for m in fold_metrics]))
-        mean_rec = float(np.mean([m["rec"] for m in fold_metrics]))
-        # Report ± std to expose fold-to-fold variance natively across all metrics.
-        std_acc = float(np.std([m["acc"] for m in fold_metrics]))
-        std_f1 = float(np.std([m["f1"] for m in fold_metrics]))
-        std_prec = float(np.std([m["prec"] for m in fold_metrics]))
-        std_rec = float(np.std([m["rec"] for m in fold_metrics]))
-
-        summary[model_name] = {
-            "Accuracy": mean_acc,
-            "Std_Accuracy": std_acc,
-            "F1-Score": mean_f1,
-            "Std_F1_Score": std_f1,
-            "Precision": mean_prec,
-            "Std_Precision": std_prec,
-            "Recall": mean_rec,
-            "Std_Recall": std_rec,
-        }
+def _print_summary(
+    dataset_name: str,
+    summary: Dict[str, Dict[str, float]],
+    cv_label: str,
+) -> None:
+    """Format and print CV summary table for a single dataset."""
+    print(f"\n{'─'*60}")
+    print(f"  CV SUMMARY — {dataset_name} ({cv_label})")
+    print(f"{'─'*60}")
+    for model_name, scores in summary.items():
         print(
-            f"  [{model_name:>3}] Acc: {mean_acc:.4f} ± {std_acc:.4f} | "
-            f"F1: {mean_f1:.4f} ± {std_f1:.4f} | "
-            f"Prec: {mean_prec:.4f} ± {std_prec:.4f} | "
-            f"Rec: {mean_rec:.4f} ± {std_rec:.4f}"
+            f"  [{model_name:>3}] Acc: {scores['Accuracy']:.4f} ± {scores['Std_Accuracy']:.4f} | "
+            f"F1: {scores['F1-Score']:.4f} ± {scores['Std_F1_Score']:.4f} | "
+            f"Prec: {scores['Precision']:.4f} ± {scores['Std_Precision']:.4f} | "
+            f"Rec: {scores['Recall']:.4f} ± {scores['Std_Recall']:.4f}"
         )
 
-    return summary, metrics
+
+def _collect_results(
+    all_results: List[Dict[str, Any]],
+    name: str,
+    summary: Dict[str, Dict[str, float]],
+) -> None:
+    """Append summary metrics to the flat results list for CSV export."""
+    for model, scores in summary.items():
+        all_results.append(
+            {
+                "Dataset": name,
+                "Model": model,
+                "Mean_Accuracy": round(scores["Accuracy"], 4),
+                "Std_Accuracy": round(scores["Std_Accuracy"], 4),
+                "Mean_F1_Score": round(scores["F1-Score"], 4),
+                "Std_F1_Score": round(scores["Std_F1_Score"], 4),
+                "Mean_Precision": round(scores["Precision"], 4),
+                "Std_Precision": round(scores["Std_Precision"], 4),
+                "Mean_Recall": round(scores["Recall"], 4),
+                "Std_Recall": round(scores["Std_Recall"], 4),
+            }
+        )
 
 
 def main() -> None:
     """Execute the full ML evaluation pipeline across all datasets."""
-    print("Initializing COMP3608 (5-Fold Stratified CV)...")
+    print("Initializing COMP3608 (5-Fold CV)...")
 
-    datasets: Dict[str, Callable[[], Tuple[pd.DataFrame, pd.Series]]] = {
+    all_results: List[Dict[str, Any]] = []
+
+    # Datasets with one row per subject — safe for StratifiedKFold.
+    standard_datasets = {
         "OASIS Alzheimer's": load_alzheimers,
-        "Parkinson's (Sakar)": load_parkinsons_v2,
         "Autism Screening": load_autism,
     }
 
-    all_results: List[Dict[str, Any]] = []
-    all_fold_metrics: Dict[str, Any] = {}
-    for name, loader_func in datasets.items():
+    for name, loader in standard_datasets.items():
         try:
-            X, y = loader_func()
-            summary, fold_metrics = evaluate_pipeline_cv(name, X, y)
-            all_fold_metrics[name] = fold_metrics
-            for model, scores in summary.items():
-                all_results.append(
-                    {
-                        "Dataset": name,
-                        "Model": model,
-                        "Mean_Accuracy": round(scores["Accuracy"], 4),
-                        "Std_Accuracy": round(scores["Std_Accuracy"], 4),
-                        "Mean_F1_Score": round(scores["F1-Score"], 4),
-                        "Std_F1_Score": round(scores["Std_F1_Score"], 4),
-                        "Mean_Precision": round(scores["Precision"], 4),
-                        "Std_Precision": round(scores["Std_Precision"], 4),
-                        "Mean_Recall": round(scores["Recall"], 4),
-                        "Std_Recall": round(scores["Std_Recall"], 4),
-                    }
-                )
+            print(f"\n{'='*60}")
+            print(f"EVALUATING: {name}  (5-Fold Stratified CV)")
+            print(f"{'='*60}")
+
+            X, y = loader()
+            print(f"  Loaded {name}. Shape: {X.shape}")
+
+            summary, _ = evaluate_pipeline(X, y)
+            _print_summary(name, summary, "Stratified")
+            _collect_results(all_results, name, summary)
         except Exception as e:
             print(f"\n[ERROR] Failed on {name}: {e}")
             traceback.print_exc()
+
+    # Parkinson's: multiple recordings per patient, requires GroupKFold.
+    try:
+        print(f"\n{'='*60}")
+        print(f"EVALUATING: Parkinson's (Sakar)  (5-Fold GroupKFold CV)")
+        print(f"{'='*60}")
+
+        X_pk, y_pk, groups_pk = load_parkinsons_v3()
+        n_patients = groups_pk.nunique()
+        print(
+            f"  Loaded Parkinson's (Sakar). Shape: {X_pk.shape}, "
+            f"Patients: {n_patients}, Recordings/patient: ~{len(X_pk) // n_patients}"
+        )
+
+        pk_summary, _ = evaluate_pipeline(X_pk, y_pk, groups=groups_pk)
+        _print_summary("Parkinson's (Sakar)", pk_summary, "GroupKFold")
+        _collect_results(all_results, "Parkinson's (Sakar)", pk_summary)
+    except Exception as e:
+        print(f"\n[ERROR] Failed on Parkinson's (Sakar): {e}")
+        traceback.print_exc()
 
     # Save results to CSV if any were generated.
     if all_results:
@@ -226,7 +113,9 @@ def main() -> None:
         results_df.to_csv(
             "project_results_summary.csv", index=False, encoding="utf-8-sig"
         )
-        print(f"\n{'='*60}\n  Pipeline complete. Results saved to CSV.\n{'='*60}\n")
+        print(f"\n{'='*60}")
+        print(f"  Pipeline complete. Results saved to CSV.")
+        print(f"{'='*60}\n")
         print(results_df.to_string(index=False))
     else:
         print("\n[WARNING] No results generated to save.")
