@@ -7,41 +7,47 @@ import pandas as pd
 
 def load_alzheimers(
     filepath: str = "data/raw/oasis_longitudinal.csv",
-) -> Tuple[pd.DataFrame, pd.Series]:
-    """Load and clean the OASIS Alzheimer's longitudinal dataset.
+) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
+    """Load the OASIS-2 longitudinal dataset using snapshot-based flattening.
 
-    Uses only baseline visits (Visit == 1) and enforces strict binary
-    classification by excluding 'Converted' patients.
+    Each visit is treated as an independent observation labeled by its
+    concurrent CDR score (CDR > 0 → Demented).  All subjects — including
+    those who converted during the study — are retained to maximise sample
+    size.  The Subject ID is returned as a group vector so that callers
+    can use GroupKFold to prevent data leakage between visits of the same
+    patient.
 
     Args:
         filepath: Path to the raw CSV file.
 
     Returns:
-        Tuple of (features, target) where target is 1=Demented, 0=Nondemented.
+        Tuple of (features, target, groups) where:
+            - target is 1=Demented (CDR > 0), 0=Nondemented (CDR == 0).
+            - groups is the Subject ID Series for GroupKFold.
     """
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}.")
 
     df = pd.read_csv(filepath)
 
-    # Use only baseline visits to prevent the same patient appearing in train and test splits
-    df = df.loc[df["Visit"] == 1].copy()
+    # Binary target from CDR: each visit labelled by its concurrent CDR.
+    df = df.dropna(subset=["CDR"])
+    df["Target"] = (df["CDR"] > 0).astype(int)
 
-    # Enforce strict binary classification by excluding 'Converted' patients.
-    # These patients progressed over time and create label ambiguity that confuses the model.
-    df = df[df["Group"].isin(["Demented", "Nondemented"])].copy()
-    df["Group"] = df["Group"].map({"Demented": 1, "Nondemented": 0})
     df["M/F"] = df["M/F"].map({"M": 1, "F": 0})
 
-    # Remove identifiers and columns that cause target leakage (CDR is directly used to assign Group)
-    cols_to_drop = ["Subject ID", "MRI ID", "Hand", "CDR", "Visit", "MR Delay"]
+    # Preserve Subject ID for group-aware splitting, then drop identifiers
+    # and leakage columns from the feature set.
+    groups = df["Subject ID"].reset_index(drop=True)
+    cols_to_drop = [
+        "Subject ID", "MRI ID", "Hand", "CDR", "Group", "Visit", "MR Delay",
+    ]
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
-    df = df.dropna(subset=["Group"])
 
-    X = df.drop("Group", axis=1)
-    y = df["Group"].astype(int)
+    X = df.drop("Target", axis=1).reset_index(drop=True)
+    y = df["Target"].reset_index(drop=True)
 
-    return X, y
+    return X, y, groups
 
 
 def load_parkinsons_v2(
