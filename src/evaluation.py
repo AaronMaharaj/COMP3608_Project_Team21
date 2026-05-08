@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -121,6 +122,40 @@ def _carve_validation_slice(
     )
 
 
+def _calibrate_scores(
+    val_scores: np.ndarray, y_val: np.ndarray, test_scores: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Fit Platt scaling on the val slice and transform val + test scores.
+
+    Per the audit's #2 priority: SMOTE and class-weighted losses systematically
+    miscalibrate predicted probabilities, which breaks downstream clinical
+    interpretation (a 0.7 score should mean 70% of such patients are positive).
+    Platt (sigmoid) is a 2-parameter logistic fit on raw scores — preferred
+    over isotonic here because the val slice is ~30-75 samples per fold, and
+    isotonic's step-function plateaus would collapse ranks and destabilise the
+    downstream threshold sweep. The audit names both methods explicitly.
+
+    The same val slice that drives the threshold sweep is reused here. Splitting
+    it further would leave too few samples per fold (val is already 10% of the
+    fold's training data). Sigmoid calibration is shape-only and strictly
+    monotone, so reuse risk is low.
+    """
+    val_arr = np.asarray(val_scores, dtype=float).reshape(-1, 1)
+    test_arr = np.asarray(test_scores, dtype=float).reshape(-1, 1)
+    y_arr = np.asarray(y_val, dtype=int).reshape(-1)
+
+    if len(np.unique(y_arr)) < 2:
+        # Calibration undefined when val slice is single-class; passthrough.
+        return val_arr.reshape(-1), test_arr.reshape(-1)
+
+    cal = LogisticRegression(C=1e10, solver="lbfgs")
+    cal.fit(val_arr, y_arr)
+    return (
+        cal.predict_proba(val_arr)[:, 1],
+        cal.predict_proba(test_arr)[:, 1],
+    )
+
+
 def _metrics_at_threshold(
     y_true: np.ndarray, scores: np.ndarray, t: float
 ) -> Dict[str, float]:
@@ -191,6 +226,7 @@ def evaluate_pipeline(
     Dict[str, Dict[str, float]],
     Dict[str, List[Dict[str, float]]],
     Dict[str, List[float]],
+    Dict[str, List[Dict[str, np.ndarray]]],
 ]:
     """Evaluate LR, RF, and FNN using cross-validation.
 
@@ -220,13 +256,19 @@ def evaluate_pipeline(
             fixed thresholds throughout (default: True).
 
     Returns:
-        Tuple (summary_dict, fold_metrics_dict, per_fold_thresholds) where:
+        Tuple (summary_dict, fold_metrics_dict, per_fold_thresholds,
+        per_fold_arrays) where:
             - summary_dict maps model name to mean/std metrics including new
               sweep-derived columns (Threshold_Median, Sensitivity, Specificity,
               Balanced_Recall, Youden_J, F2_Score).
             - fold_metrics_dict maps model name to per-fold metric dicts.
             - per_fold_thresholds maps model name to the list of fold thresholds
               (used by main.py to derive the deployment threshold).
+            - per_fold_arrays maps model name to a list of per-fold dicts with
+              keys ``y_true`` (outer test labels), ``y_score`` (positive-class
+              scores on the outer test fold), and ``threshold`` (the operating
+              point picked by the sweep on the val slice). Used downstream by
+              the visualization layer.
     """
     if groups is not None:
         splitter = GroupKFold(n_splits=n_splits)
@@ -236,6 +278,7 @@ def evaluate_pipeline(
         split_args = (X, y)
 
     metrics: Dict[str, List[Dict[str, float]]] = {"LR": [], "RF": [], "FNN": []}
+    arrays: Dict[str, List[Dict[str, np.ndarray]]] = {"LR": [], "RF": [], "FNN": []}
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(*split_args), 1):
         # Enforce strict determinism per-fold.
@@ -302,6 +345,9 @@ def evaluate_pipeline(
         )
 
         if lr_val_scores is not None and y_val is not None:
+            lr_val_scores, lr_test_scores = _calibrate_scores(
+                lr_val_scores, np.asarray(y_val), lr_test_scores
+            )
             lr_sweep = _sweep_threshold(np.asarray(y_val), lr_val_scores)
         else:
             lr_sweep = _metrics_at_threshold(np.asarray(y_test), lr_test_scores, t=0.5)
@@ -315,6 +361,13 @@ def evaluate_pipeline(
         lr_m = _extract_macro_metrics(lr_rep)
         lr_auc = _safe_auc_roc(y_test, lr_test_scores)
         metrics["LR"].append({"acc": lr_acc, **lr_m, "auc": lr_auc, **lr_sweep})
+        arrays["LR"].append(
+            {
+                "y_true": np.asarray(y_test, dtype=int),
+                "y_score": np.asarray(lr_test_scores, dtype=float),
+                "threshold": np.asarray([lr_t], dtype=float),
+            }
+        )
 
         # ------------------------------------------------------------------
         # Random Forest.
@@ -331,6 +384,9 @@ def evaluate_pipeline(
         )
 
         if rf_val_scores is not None and y_val is not None:
+            rf_val_scores, rf_test_scores = _calibrate_scores(
+                rf_val_scores, np.asarray(y_val), rf_test_scores
+            )
             rf_sweep = _sweep_threshold(np.asarray(y_val), rf_val_scores)
         else:
             rf_sweep = _metrics_at_threshold(np.asarray(y_test), rf_test_scores, t=0.5)
@@ -344,6 +400,13 @@ def evaluate_pipeline(
         rf_m = _extract_macro_metrics(rf_rep)
         rf_auc = _safe_auc_roc(y_test, rf_test_scores)
         metrics["RF"].append({"acc": rf_acc, **rf_m, "auc": rf_auc, **rf_sweep})
+        arrays["RF"].append(
+            {
+                "y_true": np.asarray(y_test, dtype=int),
+                "y_score": np.asarray(rf_test_scores, dtype=float),
+                "threshold": np.asarray([rf_t], dtype=float),
+            }
+        )
 
         # ------------------------------------------------------------------
         # Feed-Forward Neural Network.
@@ -375,6 +438,9 @@ def evaluate_pipeline(
             and fnn_val_scores is not None
             and y_val is not None
         ):
+            fnn_val_scores, fnn_test_scores = _calibrate_scores(
+                fnn_val_scores, np.asarray(y_val), fnn_test_scores
+            )
             fnn_sweep = _sweep_threshold(np.asarray(y_val), fnn_val_scores)
         else:
             fnn_sweep = _metrics_at_threshold(
@@ -391,6 +457,13 @@ def evaluate_pipeline(
         fnn_auc = _safe_auc_roc(y_test, fnn_test_scores)
         metrics["FNN"].append(
             {"acc": fnn_acc, **fnn_m, "auc": fnn_auc, **fnn_sweep}
+        )
+        arrays["FNN"].append(
+            {
+                "y_true": np.asarray(y_test, dtype=int),
+                "y_score": np.asarray(fnn_test_scores, dtype=float),
+                "threshold": np.asarray([fnn_t], dtype=float),
+            }
         )
 
     # ------------------------------------------------------------------
@@ -435,4 +508,4 @@ def evaluate_pipeline(
                 f"Per-fold values: {thresholds_arr.tolist()}"
             )
 
-    return summary, metrics, per_fold_thresholds
+    return summary, metrics, per_fold_thresholds, arrays

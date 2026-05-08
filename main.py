@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+CV_ARRAYS_DIR = Path("artifacts") / "cv_arrays"
+
 # Set seeds for reproducibility across torch and numpy architectures.
 torch.manual_seed(67)
 np.random.seed(67)
@@ -89,6 +91,27 @@ def _collect_results(
         )
 
 
+def _save_cv_arrays(
+    dataset_key: str,
+    arrays: Dict[str, List[Dict[str, np.ndarray]]],
+) -> None:
+    """Persist per-fold (y_true, y_score, threshold) arrays for visualization.
+
+    One .npz per (dataset, model). Keys are flattened as ``fold{i}_<field>`` so
+    the consumer can iterate without unpickling. Saved to artifacts/cv_arrays/.
+    """
+    CV_ARRAYS_DIR.mkdir(parents=True, exist_ok=True)
+    for model_name, fold_list in arrays.items():
+        out_path = CV_ARRAYS_DIR / f"{dataset_key}__{model_name}.npz"
+        flat: Dict[str, np.ndarray] = {}
+        for i, fold in enumerate(fold_list):
+            flat[f"fold{i}_y_true"] = fold["y_true"]
+            flat[f"fold{i}_y_score"] = fold["y_score"]
+            flat[f"fold{i}_threshold"] = fold["threshold"]
+        np.savez_compressed(out_path, **flat)
+    print(f"  CV arrays for {dataset_key} written to {CV_ARRAYS_DIR}")
+
+
 def _build_threshold_record(
     summary: Dict[str, Dict[str, float]],
     per_fold_thresholds: Dict[str, List[float]],
@@ -140,7 +163,7 @@ def main() -> None:
             X, y = loader()
             print(f"  Loaded {name}. Shape: {X.shape}")
 
-            summary, _, per_fold = evaluate_pipeline(
+            summary, _, per_fold, arrays = evaluate_pipeline(
                 X, y, run_threshold_sweep=False
             )
             _print_summary(name, summary, "Stratified")
@@ -148,6 +171,7 @@ def main() -> None:
             thresholds_index[PRODUCTION_KEY[name]] = _build_threshold_record(
                 summary, per_fold
             )
+            _save_cv_arrays(PRODUCTION_KEY[name], arrays)
         except Exception as e:
             print(f"\n[ERROR] Failed on {name}: {e}")
             traceback.print_exc()
@@ -171,7 +195,7 @@ def main() -> None:
                 f"Subjects: {n_subjects}, Observations/subject: ~{len(X) // n_subjects}"
             )
 
-            summary, _, per_fold = evaluate_pipeline(
+            summary, _, per_fold, arrays = evaluate_pipeline(
                 X, y, groups=groups, run_threshold_sweep=True
             )
             _print_summary(name, summary, "GroupKFold")
@@ -179,6 +203,7 @@ def main() -> None:
             thresholds_index[PRODUCTION_KEY[name]] = _build_threshold_record(
                 summary, per_fold
             )
+            _save_cv_arrays(PRODUCTION_KEY[name], arrays)
         except Exception as e:
             print(f"\n[ERROR] Failed on {name}: {e}")
             traceback.print_exc()
