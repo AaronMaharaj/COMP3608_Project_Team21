@@ -3,13 +3,47 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import pandas as pd
 import torch
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import GroupKFold
 
 from src.data_loader import load_alzheimers, load_autism, load_parkinsons_v3
 from src.model_pytorch import train_pytorch_model
 from src.persistence import save_fnn_model, save_sklearn_model
 from src.pipeline_factory import build_lr_search, build_rf_search
+
+
+def _calibrate_estimator(
+    estimator: Any,
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: Optional[pd.Series],
+    n_splits: int = 5,
+) -> CalibratedClassifierCV:
+    """Cross-fit a Platt (sigmoid) calibrator on top of the best-found estimator.
+
+    Per the audit's #2 priority: SMOTE + class-weighted losses miscalibrate
+    predict_proba. We refit ``n_splits`` clones of ``estimator`` (each on a
+    different group-disjoint slice when groups are provided), fit one sigmoid
+    calibrator per fold on its held-out predictions, and ensemble. Platt is
+    chosen over isotonic to match the CV-side calibration (see _calibrate_scores
+    in src/evaluation.py); both are audit-recommended, sigmoid is more stable
+    on small cohorts. The returned object exposes the same ``predict_proba``
+    API as the input estimator.
+    """
+    if groups is not None:
+        cv_iter: Any = list(
+            GroupKFold(n_splits=n_splits).split(X, y, groups=groups)
+        )
+    else:
+        cv_iter = n_splits
+
+    calibrated = CalibratedClassifierCV(
+        estimator, method="sigmoid", cv=cv_iter
+    )
+    calibrated.fit(X, y)
+    return calibrated
 
 # Enforce reproducibility.
 torch.manual_seed(67)
@@ -77,31 +111,43 @@ def generate_production_artifacts() -> None:
             # Determine inner CV strategy: group-aware for grouped datasets.
             inner_cv = GroupKFold(n_splits=3) if groups is not None else 3
 
-            # Train and save LR.
+            # Train and save LR. The fitted best_estimator_ is wrapped in an
+            # isotonic CalibratedClassifierCV before saving so deployment
+            # probabilities are clinically interpretable as risk estimates.
             lr_t, lr_cv = _resolve(thresholds_index, name, "LR")
             lr_search = build_lr_search(X, cv=inner_cv, n_iter=15)
             lr_search.fit(X, y, groups=groups)
+            lr_calibrated = _calibrate_estimator(
+                lr_search.best_estimator_, X, y, groups
+            )
             save_sklearn_model(
-                lr_search.best_estimator_,
+                lr_calibrated,
                 f"models/production/{name}_lr.joblib",
                 threshold=lr_t,
                 cv_metrics=lr_cv,
             )
-            print(f"  [OK] Logistic Regression saved (threshold={lr_t:.3f}).")
+            print(f"  [OK] Logistic Regression saved (threshold={lr_t:.3f}, calibrated).")
 
-            # Train and save RF.
+            # Train and save RF (same calibration treatment as LR).
             rf_t, rf_cv = _resolve(thresholds_index, name, "RF")
             rf_search = build_rf_search(X, cv=inner_cv, n_iter=15)
             rf_search.fit(X, y, groups=groups)
+            rf_calibrated = _calibrate_estimator(
+                rf_search.best_estimator_, X, y, groups
+            )
             save_sklearn_model(
-                rf_search.best_estimator_,
+                rf_calibrated,
                 f"models/production/{name}_rf.joblib",
                 threshold=rf_t,
                 cv_metrics=rf_cv,
             )
-            print(f"  [OK] Random Forest saved (threshold={rf_t:.3f}).")
+            print(f"  [OK] Random Forest saved (threshold={rf_t:.3f}, calibrated).")
 
-            # Train and save FNN (bundles preprocessor with weights).
+            # Train and save FNN (bundles preprocessor with weights). Note:
+            # FNN production calibration would require either a sklearn
+            # adapter around the PyTorch model or a manual IsotonicRegression
+            # bundled in the artifact — left as follow-up. The CV pipeline in
+            # main.py already calibrates the FNN's per-fold scores.
             fnn_t, fnn_cv = _resolve(thresholds_index, name, "FNN")
             fnn_model, fnn_preprocessor = train_pytorch_model(X, y)
             save_fnn_model(
