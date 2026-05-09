@@ -50,6 +50,29 @@ def load_alzheimers(
     return X, y, groups
 
 
+def load_alzheimers_noninvasive(
+    filepath: str = "data/raw/oasis_longitudinal.csv",
+) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
+    """Load OASIS-2 with only non-invasive features (no MRI-derived columns).
+
+    Drops eTIV (estimated Total Intracranial Volume), nWBV (Normalized Whole
+    Brain Volume), and ASF (Atlas Scaling Factor) — all of which require an
+    MRI scan costing $1,000+.  Retains demographics (Age, M/F, EDUC, SES)
+    and the MMSE cognitive screen (a 10-minute pen-and-paper test).
+
+    This variant directly tests whether the pipeline adds triage value using
+    only cheap, non-invasive inputs — the project's stated clinical goal.
+
+    Returns the same (features, target, groups) tuple as load_alzheimers().
+    """
+    X, y, groups = load_alzheimers(filepath)
+
+    mri_cols = ["eTIV", "nWBV", "ASF"]
+    X = X.drop(columns=[c for c in mri_cols if c in X.columns])
+
+    return X, y, groups
+
+
 def load_parkinsons_v2(
     filepath: str = "data/raw/pd_speech_features.csv",
 ) -> Tuple[pd.DataFrame, pd.Series]:

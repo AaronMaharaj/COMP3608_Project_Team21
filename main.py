@@ -18,7 +18,12 @@ np.random.seed(67)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
-from src.data_loader import load_alzheimers, load_autism, load_parkinsons_v3
+from src.data_loader import (
+    load_alzheimers,
+    load_alzheimers_noninvasive,
+    load_autism,
+    load_parkinsons_v3,
+)
 from src.evaluation import evaluate_pipeline
 
 
@@ -27,6 +32,7 @@ from src.evaluation import evaluate_pipeline
 PRODUCTION_KEY = {
     "Autism Screening": "Autism_Screening",
     "OASIS Alzheimer's": "OASIS_Alzheimers",
+    "OASIS Alzheimer's (Non-Invasive)": "OASIS_Alzheimers_NonInvasive",
     "Parkinson's (Sakar)": "Parkinsons_Sakar",
 }
 
@@ -179,6 +185,7 @@ def main() -> None:
     # Datasets with multiple observations per subject — requires GroupKFold.
     grouped_datasets = {
         "OASIS Alzheimer's": load_alzheimers,
+        "OASIS Alzheimer's (Non-Invasive)": load_alzheimers_noninvasive,
         "Parkinson's (Sakar)": load_parkinsons_v3,
     }
 

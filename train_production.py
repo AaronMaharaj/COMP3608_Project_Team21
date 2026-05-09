@@ -8,7 +8,12 @@ import torch
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import GroupKFold
 
-from src.data_loader import load_alzheimers, load_autism, load_parkinsons_v3
+from src.data_loader import (
+    load_alzheimers,
+    load_alzheimers_noninvasive,
+    load_autism,
+    load_parkinsons_v3,
+)
 from src.model_pytorch import train_pytorch_model
 from src.persistence import save_fnn_model, save_sklearn_model
 from src.pipeline_factory import build_lr_search, build_rf_search
@@ -95,6 +100,7 @@ def generate_production_artifacts() -> None:
 
     datasets = {
         "OASIS_Alzheimers": {"loader": load_alzheimers, "grouped": True},
+        "OASIS_Alzheimers_NonInvasive": {"loader": load_alzheimers_noninvasive, "grouped": True},
         "Autism_Screening": {"loader": load_autism, "grouped": False},
         "Parkinsons_Sakar": {"loader": load_parkinsons_v3, "grouped": True},
     }
