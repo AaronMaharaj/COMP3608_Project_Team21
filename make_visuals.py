@@ -21,10 +21,24 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
+try:
+    import shap
+    HAS_SHAP = True
+except ImportError:
+    HAS_SHAP = False
+
+import torch
+
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
-from src.persistence import load_sklearn_model
+from src.persistence import load_fnn_artifact, load_sklearn_model
+from src.data_loader import (
+    load_alzheimers,
+    load_alzheimers_noninvasive,
+    load_autism,
+    load_parkinsons_v3,
+)
 from src.visualizations import (
     DEFAULT_C_FN,
     DEFAULT_C_FP,
@@ -42,13 +56,27 @@ ARTIFACTS_DIR = Path("artifacts") / "cv_arrays"
 PRODUCTION_DIR = Path("models") / "production"
 FIGURES_DIR = Path("figures")
 
-DATASETS = ["Autism_Screening", "OASIS_Alzheimers", "Parkinsons_Sakar"]
+DATASETS = [
+    "Autism_Screening",
+    "OASIS_Alzheimers",
+    "OASIS_Alzheimers_NonInvasive",
+    "Parkinsons_Sakar",
+]
 DATASET_LABELS = {
     "Autism_Screening": "Autism Screening",
     "OASIS_Alzheimers": "OASIS Alzheimer's",
+    "OASIS_Alzheimers_NonInvasive": "OASIS Alzheimer's (Non-Invasive)",
     "Parkinsons_Sakar": "Parkinson's (Sakar)",
 }
 MODELS = ["LR", "RF", "FNN"]
+
+# Loaders for SHAP background data — keyed by dataset production key.
+_DATASET_LOADERS = {
+    "Autism_Screening": lambda: (*load_autism(), None),
+    "OASIS_Alzheimers": load_alzheimers,
+    "OASIS_Alzheimers_NonInvasive": load_alzheimers_noninvasive,
+    "Parkinsons_Sakar": load_parkinsons_v3,
+}
 
 
 def _load_fold_list(dataset: str, model: str) -> Optional[List[Dict[str, np.ndarray]]]:
@@ -278,6 +306,89 @@ def _render_rf_feature_importance(dataset: str) -> None:
     print(f"  [OK] {out}")
 
 
+def _render_fnn_shap(dataset: str) -> None:
+    """Render SHAP-based feature importance for the production FNN model.
+
+    Uses GradientExplainer (native PyTorch support, fast) to compute
+    mean |SHAP| values and plot a horizontal bar chart of the top features.
+    """
+    if not HAS_SHAP:
+        print(f"  [WARN] shap not installed; skipping FNN SHAP plot. pip install shap")
+        return
+
+    fnn_path = PRODUCTION_DIR / f"{dataset}_fnn.joblib"
+    if not fnn_path.exists():
+        print(f"  [WARN] missing {fnn_path}; skipping FNN SHAP plot.")
+        return
+
+    loader = _DATASET_LOADERS.get(dataset)
+    if loader is None:
+        print(f"  [WARN] no data loader for {dataset}; skipping FNN SHAP.")
+        return
+
+    try:
+        model, preprocessor, threshold, _ = load_fnn_artifact(str(fnn_path))
+    except Exception as exc:
+        print(f"  [WARN] could not load FNN artifact ({exc}); skipping SHAP.")
+        return
+
+    # Load raw data and preprocess it through the bundled ColumnTransformer.
+    result = loader()
+    X_raw = result[0]
+
+    try:
+        X_processed = preprocessor.transform(X_raw)
+        feature_names = list(preprocessor.get_feature_names_out())
+    except Exception as exc:
+        print(f"  [WARN] preprocessing failed ({exc}); skipping FNN SHAP.")
+        return
+
+    X_tensor = torch.tensor(X_processed, dtype=torch.float32)
+
+    # Use a subsample as background for GradientExplainer to keep compute
+    # tractable (100 samples is standard for tabular SHAP).
+    n_bg = min(100, len(X_tensor))
+    bg_indices = np.random.default_rng(67).choice(len(X_tensor), n_bg, replace=False)
+    background = X_tensor[bg_indices]
+
+    model.eval()
+    try:
+        explainer = shap.GradientExplainer(model, background)
+        shap_values = explainer.shap_values(X_tensor)
+    except Exception as exc:
+        print(f"  [WARN] SHAP computation failed ({exc}); skipping.")
+        return
+
+    # shap_values shape: (n_samples, n_features) — take mean |SHAP| per feature.
+    if isinstance(shap_values, list):
+        shap_values = shap_values[0]
+    shap_arr = np.asarray(shap_values, dtype=float)
+    if shap_arr.ndim == 3:
+        shap_arr = shap_arr[:, :, 0]
+    mean_abs_shap = np.mean(np.abs(shap_arr), axis=0)
+
+    # Plot top-N features.
+    top_n = min(20, len(feature_names))
+    order = np.argsort(mean_abs_shap)[::-1][:top_n]
+    top_imp = mean_abs_shap[order]
+    top_names = [feature_names[i] for i in order]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ypos = np.arange(len(order))[::-1]
+    ax.barh(ypos, top_imp, color="#d62728", edgecolor="black")
+    ax.set_yticks(ypos, top_names)
+    ax.set_xlabel("Mean |SHAP value|")
+    ax.set_title(
+        f"Top {top_n} FNN feature importances (SHAP) — {DATASET_LABELS[dataset]}"
+    )
+    ax.grid(axis="x", alpha=0.3)
+    fig.tight_layout()
+    out = FIGURES_DIR / f"{dataset}__fnn_shap.png"
+    fig.savefig(out, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [OK] {out}")
+
+
 def main() -> None:
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -307,6 +418,7 @@ def main() -> None:
         _render_dca(dataset, fold_arrays)
         _render_confusion(dataset, fold_arrays)
         _render_rf_feature_importance(dataset)
+        _render_fnn_shap(dataset)
 
     print(f"\nFigures written to {FIGURES_DIR.resolve()}")
 
